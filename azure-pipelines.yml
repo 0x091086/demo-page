@@ -8,24 +8,28 @@ variables:
   - group: CICD
 
 parameters:
-  - name: tag
-    default: "$(Build.BuildId)"
   - name: imageName
     default: "demo-page"
 
 stages:
   - stage: CICD
     displayName: CICD workflow
+
     jobs:
       - job: Build
         displayName: Build
+
         pool:
           name: local-agent
 
         steps:
-          - script: |
-              echo "var=$(appVersion)"
-              echo "tag=${{ parameters.tag }}"
+          - bash: |
+              SHORT_SHA=$(echo "$(Build.SourceVersion)" | cut -c1-7)
+              echo "Commit: $(Build.SourceVersion)"
+              echo "Short SHA: $SHORT_SHA"
+              echo "##vso[task.setvariable variable=SHORT_SHA;isOutput=true]$SHORT_SHA"
+            name: SetSha
+            displayName: Set image tag from commit
 
           - task: Docker@2
             displayName: Build Docker Image
@@ -34,8 +38,9 @@ stages:
               containerRegistry: registryConnection
               repository: ${{ parameters.imageName }}
               dockerfile: "**/Dockerfile"
-              tags: ${{ parameters.tag }}
-              arguments: "--build-arg VERSION=${{ parameters.tag }}"
+              tags: |
+                $(SHORT_SHA)
+              arguments: "--build-arg VERSION=$(SHORT_SHA)"
 
           - task: Docker@2
             displayName: Push Docker Image
@@ -43,20 +48,26 @@ stages:
               command: push
               containerRegistry: registryConnection
               repository: ${{ parameters.imageName }}
-              tags: ${{ parameters.tag }}
+              tags: |
+                $(SHORT_SHA)
 
       - job: Deploy
         displayName: Deploy
         dependsOn: Build
-        pool: local-agent
-        steps: 
+
+        pool:
+          name: local-agent
+
+        variables:
+          SHORT_SHA: $[ dependencies.Build.outputs['SetSha.SHORT_SHA'] ]
+
+        steps:
           - task: AzureContainerApps@1
+            displayName: Deploy Container App
             inputs:
-              azureSubscription: 'appDeployConnection'
-              imageToDeploy: acrappsjosue.azurecr.io/${{ parameters.imageName }}:$(Build.BuildId)
+              azureSubscription: appDeployConnection
+              imageToDeploy: acrappsjosue.azurecr.io/${{ parameters.imageName }}:$(SHORT_SHA)
               containerAppName: app-demo-page
               resourceGroup: rg-devops
               acrUsername: $(acrUsername)
               acrPassword: $(acrPassword)
-
-    
